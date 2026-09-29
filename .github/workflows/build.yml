@@ -1,0 +1,46 @@
+name: Construire et publier l'image
+
+# Lancement manuel (onglet Actions > "Run workflow") et a chaque modification
+# des fichiers sur la branche main. Chaque construction installe la derniere
+# version de HiveOS disponible sur le depot officiel.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: clusmi/hiveostemplate
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Derniere version de HiveOS sur le depot officiel
+        run: |
+          version=$(curl -fsSL https://download.hiveos.farm/repo/binary/Packages.gz | zcat \
+            | awk '/^Package: hive$/ {p=1; next} /^Package:/ {p=0} p && /^Version:/ {print $2}' \
+            | sort -V | tail -1)
+          echo "HiveOS : hive ${version}"
+          echo "### ${IMAGE}:latest : hive ${version}" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Construire et envoyer sur Docker Hub
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          pull: true
+          no-cache: true
+          tags: ${{ env.IMAGE }}:latest
