@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Liste les cartes NVIDIA de la machine hote qui ne sont PAS louees, pour que
+# le filtre lspci les masque a HiveOS. Les cartes louees sont celles que le
+# pilote NVIDIA montre dans le conteneur (nvidia-smi, ou nvtool de HiveOS).
+#
+# Ecrit /run/hive/hidden-pci (une adresse PCI par ligne, ex. 0000:24:00.0) et
+# affiche un resume. Sans carte visible, ne masque rien.
+real="${LSPCI_REAL:-/usr/bin/lspci}"
+hidden_file="${HIDDEN_PCI_FILE:-/run/hive/hidden-pci}"
+
+mkdir -p "$(dirname "$hidden_file")"
+rm -f "$hidden_file"
+
+ids=$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader 2>/dev/null)
+[[ -z "$ids" ]] && ids=$(nvtool --quiet --csv --busid 2>/dev/null)
+
+# Adresses du type 00000000:41:00.0 -> emplacement 0000:41:00
+mapfile -t visible < <(grep -oiE '[0-9a-f]{4,8}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]' <<< "$ids" \
+  | tr 'A-F' 'a-f' \
+  | awk -F: '{ d = $1; d = substr(d, length(d) - 3); print d ":" $2 ":" substr($3, 1, 2) }' \
+  | sort -u)
+
+if [[ ${#visible[@]} -eq 0 ]]; then
+  echo "aucune carte NVIDIA visible par le pilote : aucune carte masquee"
+  exit 0
+fi
+
+# Toutes les fonctions PCI NVIDIA de l'hote (carte graphique + son audio...)
+hidden=0
+while read -r id; do
+  [[ -z "$id" ]] && continue
+  slot="${id%.*}"
+  keep=0
+  for v in "${visible[@]}"; do [[ "$slot" == "$v" ]] && keep=1 && break; done
+  if [[ $keep -eq 0 ]]; then
+    echo "$id" >> "$hidden_file"
+    hidden=$((hidden + 1))
+  fi
+done < <("$real" -Dn -d 10de: 2>/dev/null | awk '{ print tolower($1) }')
+
+echo "cartes louees : ${visible[*]} ; autres fonctions NVIDIA de l'hote masquees : $hidden"

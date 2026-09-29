@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Dans un conteneur, la liste des modules du noyau (/proc/modules) n'est pas
+# toujours lisible. HiveOS s'en sert pour savoir si le pilote NVIDIA est
+# charge : sans lui, il marque toutes les cartes en panne. Quand le GPU loue
+# est bien present, on signale le module nvidia.
+out=$(/usr/bin/kmod list 2>/dev/null)
+[[ -z "$out" ]] && out="Module                  Size  Used by"
+echo "$out"
+if ! grep -q '^nvidia ' <<< "$out" && { [[ -e /dev/nvidiactl ]] || [[ -e /proc/driver/nvidia/version ]]; }; then
+  echo "nvidia                        0  0"
+fi

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Pas de systemd dans le conteneur. HiveOS appelle systemctl pour des services
+# qui n'existent pas ici (serveur graphique, console, VPN...) : les questions
+# d'etat repondent "inactif", les autres commandes ne font rien.
+for arg in "$@"; do
+  case "$arg" in
+    status|is-active|is-enabled) exit 3 ;;
+  esac
+done
+exit 0

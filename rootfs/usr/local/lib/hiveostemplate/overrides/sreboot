@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Remplace le sreboot de HiveOS (redemarrage par sysrq), impossible dans un
+# conteneur loue. Un "Reboot" demande depuis le tableau de bord relance le
+# mineur et l'agent HiveOS ; un "Shutdown" arrete le mineur.
+source /etc/environment
+export PATH
+
+case "${1:-}" in
+  -h|--help)
+    echo "hiveostemplate : redemarre les services HiveOS (mineur + agent) au lieu de la machine."
+    exit 0
+    ;;
+  shutdown|wakealarm)
+    echo "[hiveostemplate] Arret demande : impossible d'eteindre un GPU loue, arret du mineur."
+    /hive/bin/miner stop
+    exit 0
+    ;;
+esac
+
+echo "[hiveostemplate] Redemarrage demande : relance du mineur et de l'agent HiveOS."
+/hive/bin/miner restart
+/hive/bin/agent-screen restart
+exit 0

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Dans un conteneur, lspci voit TOUTES les cartes de la machine hote, alors
+# que seules les cartes louees sont utilisables. HiveOS les compterait toutes
+# (et les marquerait en panne). Ce filtre masque les cartes NVIDIA non louees,
+# listees au demarrage par /usr/local/lib/hiveostemplate/visible-gpus.
+real="${LSPCI_REAL:-/usr/bin/lspci}"
+hidden_file="${HIDDEN_PCI_FILE:-/run/hive/hidden-pci}"
+
+[[ -s "$hidden_file" ]] || exec "$real" "$@"
+
+# Les options "verbeuses" (-v, -vmm, -vnns...) affichent un bloc par carte,
+# separe par une ligne vide ; les autres, une ligne par carte.
+records=0
+for arg in "$@"; do
+  [[ "$arg" == -* && "$arg" != --* && "$arg" == *v* ]] && records=1
+done
+
+"$real" "$@" | awk -v hidden_file="$hidden_file" -v records="$records" '
+  function norm(id) {
+    id = tolower(id)
+    if (split(id, parts, ":") == 2) id = "0000:" id
+    return id
+  }
+  BEGIN {
+    while ((getline line < hidden_file) > 0) if (line != "") hide[tolower(line)] = 1
+    if (records) { RS = ""; ORS = "\n\n" }
+  }
+  {
+    id = $1
+    if (records && $1 == "Slot:") id = $2
+    if (!(norm(id) in hide)) print
+  }
+'

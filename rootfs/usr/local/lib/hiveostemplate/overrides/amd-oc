@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Remplace un outil HiveOS qui agit sur le materiel (overclocking, ventilateurs,
+# pilote NVIDIA) : impossible sur un GPU loue, ou c'est l'hote qui gere tout ca.
+name=$(basename "$0")
+case "$name" in
+  nvidia-oc)            msg="Overclocking NVIDIA desactive : impossible sur un GPU loue." ; logf=/var/log/nvidia-oc.log ;;
+  amd-oc)               msg="Overclocking AMD desactive : impossible sur un GPU loue." ; logf=/var/log/amd-oc.log ;;
+  intel-oc)             msg="Overclocking Intel desactive : impossible sur un GPU loue." ; logf=/var/log/intel-oc.log ;;
+  tweakers)             msg="Tweakers desactives : impossible sur un GPU loue." ; logf= ;;
+  autofan)              msg="Autofan desactive : les ventilateurs sont geres par l'hote." ; logf= ;;
+  nvidia-driver-update) msg="Mise a jour du pilote NVIDIA desactivee : le pilote est fourni par l'hote." ; logf= ;;
+  *)                    msg="$name desactive dans ce conteneur." ; logf= ;;
+esac
+
+# Le tableau de bord lit le journal d'overclocking apres une demande : on y
+# laisse l'explication.
+[[ -n "$logf" ]] && echo "$msg" > "$logf" 2>/dev/null
+[[ "${1:-}" != "quiet" ]] && echo "[hiveostemplate] $msg"
+exit 0

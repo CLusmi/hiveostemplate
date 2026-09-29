@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Demarre HiveOS dans le conteneur, a la place de la sequence de boot normale
+# (/hive/bin/hive), qui suppose une vraie machine (systemd, pilotes, X...).
+#
+# Variables a renseigner dans le template (comme sur Clore.ai) :
+#   RIG_ID       identifiant du worker HiveOS
+#   RIG_PASSWD   mot de passe du worker
+#   FARM_HASH    hash de la ferme (seul, il cree un nouveau worker)
+# Facultatif :
+#   WORKER_NAME    nom du worker a creer avec FARM_HASH
+#   HIVE_HOST_URL  serveur API HiveOS (defaut http://api.hiveos.farm)
+set -uo pipefail
+
+log() { echo "[hiveostemplate] $*"; }
+die() { echo "[hiveostemplate] ERREUR: $*" >&2; exit 1; }
+
+# Environnement HiveOS (PATH, chemins des fichiers de config...)
+# shellcheck disable=SC1091
+source /etc/environment
+# shellcheck disable=SC2046
+export $(grep -vE '^$|^#' /etc/environment | cut -d= -f1)
+export HOME=/home/user
+
+# Mode direct : "docker run image bash" ou toute autre commande.
+if [[ $# -gt 0 ]]; then
+  exec "$@"
+fi
+
+log "$(cat /etc/hiveos-version 2>/dev/null)"
+
+# --- Identifiants ------------------------------------------------------------
+rig_id="${RIG_ID:-}"
+rig_passwd="${RIG_PASSWD:-}"
+farm_hash="${FARM_HASH:-}"
+worker_name="${WORKER_NAME:-}"
+host_url="${HIVE_HOST_URL:-http://api.hiveos.farm}"
+
+if [[ -z "$farm_hash" && ( -z "$rig_id" || -z "$rig_passwd" ) ]]; then
+  die "renseigne FARM_HASH, ou RIG_ID et RIG_PASSWD (les trois comme sur Clore, c'est bien aussi)."
+fi
+if [[ -n "$rig_id" && -z "$rig_passwd" ]]; then
+  die "RIG_ID est renseigne mais RIG_PASSWD manque."
+fi
+
+mkdir -p /hive-config /run/hive /var/log/miner /home/user/.cache
+cp -r --no-clobber /hive/etc/hive-config.stub/* /hive-config/ 2>/dev/null
+
+# Avec FARM_HASH seul, HiveOS cree un worker au premier demarrage et ecrit son
+# RIG_ID dans rig.conf. Si l'instance redemarre, on garde ce worker au lieu
+# d'en creer un nouveau a chaque fois.
+marker=/hive-config/.hiveostemplate-farm-hash
+reuse=0
+if [[ -z "$rig_id" && -f "$RIG_CONF" && -f "$marker" && "$(< "$marker")" == "$farm_hash" ]] \
+   && grep -q '^RIG_ID=..*' "$RIG_CONF"; then
+  reuse=1
+fi
+
+if [[ $reuse -eq 1 ]]; then
+  log "Worker deja enregistre lors d'un demarrage precedent : reutilisation."
+else
+  {
+    echo "HIVE_HOST_URL=\"$host_url\""
+    [[ -n "$rig_id" ]]      && echo "RIG_ID=\"$rig_id\""
+    [[ -n "$rig_passwd" ]]  && echo "RIG_PASSWD=\"$rig_passwd\""
+    [[ -n "$farm_hash" ]]   && echo "FARM_HASH=\"$farm_hash\""
+    [[ -n "$worker_name" ]] && echo "WORKER_NAME=\"$worker_name\""
+  } > "$RIG_CONF"
+  chmod 600 "$RIG_CONF"
+  if [[ -n "$farm_hash" ]]; then echo "$farm_hash" > "$marker"; else rm -f "$marker"; fi
+fi
+
+# --- Demarrage ---------------------------------------------------------------
+if ! ls /dev/nvidia* >/dev/null 2>&1; then
+  log "ATTENTION : aucun GPU NVIDIA visible dans le conteneur."
+fi
+
+log "GPU : $(/usr/local/lib/hiveostemplate/visible-gpus)"
+log "Detection des GPU"
+gpu-detect listjson > "$GPU_DETECT_JSON" 2>/dev/null
+
+log "Taches planifiees de HiveOS (cron)"
+crontab /hive/etc/crontab.root
+cron
+
+# Premier contact avec HiveOS : enregistre le worker et recupere la config
+# (Flight Sheet, wallet...). On reessaie si le reseau n'est pas encore pret.
+connected=0
+for attempt in 1 2 3 4 5; do
+  log "Connexion a HiveOS (essai $attempt)"
+  out=$(hello boot verbose nocolor 2>&1)
+  code=$?
+  # shellcheck disable=SC2001
+  echo "$out" | sed 's/\x1b\[[0-9;]*m//g'
+  if [[ $code -eq 0 ]]; then connected=1; break; fi
+  if echo "$out" | grep -qiE 'error \(|got error|invalid|not found|wrong|denied'; then
+    die "HiveOS refuse les identifiants : verifie RIG_ID, RIG_PASSWD et FARM_HASH."
+  fi
+  sleep $((attempt * 5))
+done
+[[ $connected -eq 1 ]] || die "impossible de joindre HiveOS ($host_url)."
+
+# shellcheck disable=SC1090
+source "$RIG_CONF"
+log "Worker HiveOS : ${WORKER_NAME:-?} (RIG_ID ${RIG_ID:-?})"
+
+cache-hive-ip nocolor >/dev/null 2>&1
+log "Demarrage de l'agent HiveOS"
+agent-screen start
+log "Demarrage du mineur (Flight Sheet)"
+miner start
+log "Demarrage du watchdog HiveOS"
+wd start
+log "HiveOS demarre. Le mineur se pilote depuis ton tableau de bord HiveOS."
+
+# --- Journaux et arret -------------------------------------------------------
+touch /var/log/hive-agent.log /run/hive/miner.1
+tail -n0 -F /var/log/hive-agent.log /run/hive/miner.1 2>/dev/null &
+tailer=$!
+
+stop() {
+  log "Arret demande : arret du mineur et de l'agent."
+  wd stop >/dev/null 2>&1
+  miner stop >/dev/null 2>&1
+  agent-screen stop >/dev/null 2>&1
+  kill "$tailer" 2>/dev/null
+  exit 0
+}
+trap stop TERM INT
+
+while true; do
+  sleep 60 &
+  wait $!
+done

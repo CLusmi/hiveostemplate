@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Pas de redemarrage machine dans un conteneur loue : on passe par sreboot,
+# qui relance les services HiveOS a la place.
+exec /hive/sbin/sreboot

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Pas d'arret machine dans un conteneur loue : on arrete seulement le mineur.
+exec /hive/sbin/sreboot shutdown
